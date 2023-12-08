@@ -96,6 +96,7 @@ from homeassistant.util.network import is_local
 from . import indieauth
 
 if TYPE_CHECKING:
+    from homeassistant.auth.providers.auth_proxy import AuthProxyAuthProvider
     from homeassistant.auth.providers.trusted_networks import (
         TrustedNetworksAuthProvider,
     )
@@ -178,6 +179,22 @@ class AuthProvidersView(HomeAssistantView):
                     )
                 except InvalidAuthError:
                     # Not a trusted network, so we don't expose that trusted_network authenticator is setup
+                    continue
+            elif provider.type == "auth_proxy":
+                if cloud_connection:
+                    # Skip quickly as trusted networks are not available on cloud
+                    continue
+
+                try:
+                    assert request.transport
+                    cast("AuthProxyAuthProvider", provider).async_validate_access(
+                        ip_address(
+                            request.transport.get_extra_info("peername")[0],
+                        ),
+                        request.headers,
+                    )
+                except InvalidAuthError:
+                    # Auth proxy headers not valid, so we don't expose that auth proxy is setup.
                     continue
             elif (
                 provider.type == "homeassistant"
@@ -332,10 +349,16 @@ class LoginFlowIndexView(LoginFlowBaseView):
             handler = data["handler"]
 
         try:
+            assert request.transport
             result = await self._flow_mgr.async_init(
                 handler,  # type: ignore[arg-type]
                 context={
                     "ip_address": ip_address(request.remote),  # type: ignore[arg-type]
+                    # Auth proxy needs to know the actual IP address of the request.
+                    "peer_ip_address": ip_address(
+                        request.transport.get_extra_info("peername")[0],
+                    ),
+                    "headers": request.headers,
                     "credential_only": data.get("type") == "link_user",
                     "redirect_uri": redirect_uri,
                 },
